@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en-US">
+ <head>
+    <meta charset="utf-8">
+    <title>Tesla Chargers</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #container {
+            display: flex;
+            height: 100vh;
+            flex-direction: row;
+            align-items: stretch;
+        }
+
+        #side-panel {
+            flex-basis: 500px;
+            overflow-y: scroll;
+            padding: 20px;
+        }
+
+        #side-panel h2 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #2b8cbe;
+        }
+
+        #map {
+            flex-grow: 1;
+        }
+
+        button {
+            margin-bottom: 10px;
+        }
+
+        table {
+            border-collapse: collapse;
+            border-spacing: 0;
+            width: 100%;
+            border: 1px solid #ddd;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 16px;
+        }
+
+        /* Table styles */
+        tr {
+            transition: all 0.2s ease-in-out;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        /* Skip header row for hover effects */
+        tr:not(:first-child) {
+            cursor: pointer;
+        }
+
+        tr:not(:first-child):hover {
+            background-color: #2b8cbe20;
+            transform: translateX(5px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        /* Style the header row */
+        tr:first-child {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        /* Responsive layout */
+        @media screen and (max-width: 1024px) {
+            #side-panel {
+                display: none;
+            }
+            
+            #map {
+                width: 100%;
+            }
+        }
+
+        /* Style for the popup */
+        .station-popup {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            font-size: 14px;
+            padding: 5px 10px;
+        }
+        
+        .station-popup .mapboxgl-popup-content {
+            padding: 12px;
+            border-radius: 4px;
+            background-color: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .station-popup strong {
+            color: #2b8cbe;
+            display: block;
+            margin-bottom: 4px;
+        }
+    </style>
+</head> 
+ <body>
+   <main id="container">
+       <div id="side-panel">
+
+           <h2>Seattle Tesla Charger Stations</h2>
+           <button id="btn-connectors">Sort by Connector Count</button>
+
+           <table>
+               <tr>
+                   <th>Station Name</th>
+                   <th>City</th>
+                   <th>Connector Count</th>
+               </tr>
+           </table>
+
+       </div>
+       <div id="map"></div>
+   </main>
+   <script>
+        mapboxgl.accessToken = 'pk.eyJ1IjoiamFlZGVuY2NhIiwiYSI6ImNtaGM4cDNxdDI3cHkya3B1emRxYzJuNWQifQ.GD3_Rhp6YQw5CkRSFClT0w';
+        let map = new mapboxgl.Map({
+            container: 'map', // container ID
+            style: 'mapbox://styles/mapbox/satellite-v9', // style URL
+            zoom: 12, // starting zoom for Seattle city view
+            center: [-122.3321, 47.6062] // center on Seattle downtown
+        });
+
+        async function geojsonFetch() {
+            let response, evdata, table;
+            response = await fetch('assets/grouped_ev_stations.geojson');
+            evdata = await response.json();
+            
+            // Add unique IDs to each feature for hover state tracking
+            evdata.features = evdata.features.map((feature, index) => {
+                feature.id = index;
+                return feature;
+            });
+
+            table = document.getElementsByTagName("table")[0];
+            let row, cell0, cell1, cell2;
+            for (let i = 0; i < evdata.features.length; i++) {
+                row = table.insertRow(-1);
+                // Add hover effect and pointer cursor
+                row.style.cursor = 'pointer';
+                row.addEventListener('mouseenter', () => row.style.backgroundColor = '#f0f0f0');
+                row.addEventListener('mouseleave', () => row.style.backgroundColor = '');
+                
+                cell0 = row.insertCell(0);
+                cell1 = row.insertCell(1);
+                cell2 = row.insertCell(2);
+
+                const props = evdata.features[i].properties || {};
+                const coords = evdata.features[i].geometry.coordinates;
+                cell0.innerHTML = props['Station Name'] || '';
+                cell1.innerHTML = props['City'] || '';
+                cell2.innerHTML = props['EV J3400 Connector Count'] || '0';
+                
+                // Add click handler to fly to location
+                row.addEventListener('click', () => {
+                    map.flyTo({
+                        center: coords,
+                        zoom: 15,
+                        essential: true
+                    });
+                });
+            }
+
+            // load data to the map as a new layer
+            map.on('load', async function loadingData() {
+                // Add Seattle boundary first
+                const seattleResponse = await fetch('assets/seattle.geojson');
+                const seattleData = await seattleResponse.json();
+                
+                map.addSource('seattle', {
+                    type: 'geojson',
+                    data: seattleData
+                });
+
+                // Add the boundary layer (so it's underneath the points)
+                map.addLayer({
+                    'id': 'seattle-fill',
+                    'type': 'fill',
+                    'source': 'seattle',
+                    'paint': {
+                        'fill-color': '#2b8cbe',
+                        'fill-opacity': 0.5
+                    }
+                });
+
+                // Add boundary outline
+                map.addLayer({
+                    'id': 'seattle-outline',
+                    'type': 'line',
+                    'source': 'seattle',
+                    'paint': {
+                        'line-color': '#2b8cbe',
+                        'line-width': 2,
+                        'line-opacity': 0.8
+                    }
+                });
+
+                // Add EV stations source
+                map.addSource('evstations', {
+                    type: 'geojson',
+                    data: evdata
+                });
+
+                // Keep track of the hovered feature
+                let hoveredStateId = null;
+
+                map.addLayer({
+                    'id': 'evstations-layer',
+                    'type': 'circle',
+                    'source': 'evstations',
+                    'paint': {
+                        'circle-radius': [
+                            'case',
+                            ['boolean', ['feature-state', 'hover'], false],
+                            12,
+                            8
+                        ],
+                        'circle-stroke-width': [
+                            'case',
+                            ['boolean', ['feature-state', 'hover'], false],
+                            3,
+                            2
+                        ],
+                        'circle-color': '#2b8cbe',
+                        'circle-stroke-color': 'white',
+                        'circle-radius-transition': {
+                            'duration': 300
+                        },
+                        'circle-stroke-width-transition': {
+                            'duration': 300
+                        }
+                    }
+                });
+                
+                // When the user moves their mouse over the points layer
+                // Create a popup but don't add it to the map yet
+                const popup = new mapboxgl.Popup({
+                    closeButton: false,
+                    closeOnClick: false,
+                    offset: 15,
+                    className: 'station-popup'
+                });
+
+                map.on('mouseenter', 'evstations-layer', (e) => {
+                    map.getCanvas().style.cursor = 'pointer';
+                    if (e.features.length > 0) {
+                        const feature = e.features[0];
+                        
+                        // Handle hover state
+                        if (hoveredStateId !== null) {
+                            map.setFeatureState(
+                                { source: 'evstations', id: hoveredStateId },
+                                { hover: false }
+                            );
+                        }
+                        hoveredStateId = feature.id;
+                        map.setFeatureState(
+                            { source: 'evstations', id: hoveredStateId },
+                            { hover: true }
+                        );
+
+                        // Show popup
+                        const coordinates = feature.geometry.coordinates.slice();
+                        const stationName = feature.properties['Station Name'];
+                        const connectorCount = feature.properties['EV J3400 Connector Count'];
+                        
+                        // Create popup content
+                        const popupContent = `
+                            <strong>${stationName}</strong><br>
+                            Connectors: ${connectorCount}
+                        `;
+                        
+                        // Ensure proper popup placement
+                        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+                            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+                        }
+                        
+                        popup
+                            .setLngLat(coordinates)
+                            .setHTML(popupContent)
+                            .addTo(map);
+                    }
+                });
+                
+                // When the mouse leaves the points layer
+                map.on('mouseleave', 'evstations-layer', () => {
+                    map.getCanvas().style.cursor = '';
+                    if (hoveredStateId !== null) {
+                        map.setFeatureState(
+                            { source: 'evstations', id: hoveredStateId },
+                            { hover: false }
+                        );
+                    }
+                    hoveredStateId = null;
+                    popup.remove(); // Remove the popup
+                });
+            });
+        };
+
+        geojsonFetch();
+
+        // wire up the sort button
+        let btnConnectors = document.getElementById('btn-connectors');
+        btnConnectors.addEventListener('click', sortTableByConnectors);
+
+        function sortTableByConnectors() {
+            let table = document.getElementsByTagName("table")[0];
+            let switching = true;
+            
+            while (switching) {
+                switching = false;
+                let rows = table.rows;
+                
+                for (let i = 1; i < (rows.length - 1); i++) {
+                    let shouldSwitch = false;
+                    let currentRow = rows[i].getElementsByTagName("td");
+                    let nextRow = rows[i + 1].getElementsByTagName("td");
+                    
+                    // Connector count is in column index 2
+                    let currentCount = parseInt(currentRow[2].innerHTML) || 0;
+                    let nextCount = parseInt(nextRow[2].innerHTML) || 0;
+                    
+                    // Sort by count in descending order (higher numbers first)
+                    if (currentCount < nextCount) {
+                        shouldSwitch = true;
+                    } else if (currentCount === nextCount) {
+                        // If counts are equal, sort alphabetically by station name
+                        let currentName = currentRow[0].innerHTML.toLowerCase();
+                        let nextName = nextRow[0].innerHTML.toLowerCase();
+                        if (currentName > nextName) {
+                            shouldSwitch = true;
+                        }
+                    }
+                    
+                    if (shouldSwitch) {
+                        rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                        switching = true;
+                        break;
+                    }
+                }
+            }
+            
+            // Log the results to verify sorting (for debugging)
+            console.log("Sorted table:");
+            let rows = table.rows;
+            for (let i = 1; i < rows.length; i++) {
+                let count = rows[i].getElementsByTagName("td")[2].innerHTML;
+                let name = rows[i].getElementsByTagName("td")[0].innerHTML;
+                console.log(`Count: ${count}, Name: ${name}`);
+            }
+        }
+   </script>
+</body>  
+<html>   
