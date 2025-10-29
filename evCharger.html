@@ -12,27 +12,66 @@
             padding: 0;
         }
 
+        /* Layout: make the map fullscreen and the side-panel a floating overlay on the right */
         #container {
-            display: flex;
             height: 100vh;
-            flex-direction: row;
-            align-items: stretch;
         }
 
+        /* Fullscreen map behind everything */
+        #map {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        /* Floating panel on the right */
         #side-panel {
-            flex-basis: 500px;
-            overflow-y: scroll;
-            padding: 20px;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            bottom: 20px; /* constrain the panel to the viewport bottom */
+            width: 420px;
+            max-width: calc(100% - 40px);
+            /* use flex so the inner body can scroll without the panel growing beyond viewport */
+            display: flex;
+            flex-direction: column;
+            padding: 18px;
+            background: rgba(255,255,255,0.95);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+            border-radius: 8px;
+            z-index: 2;
+            backdrop-filter: blur(6px);
+            box-sizing: border-box; /* include padding/border in sizing */
         }
 
         #side-panel h2 {
             text-align: center;
-            margin-bottom: 20px;
+            margin-bottom: 14px;
             color: #2b8cbe;
         }
 
-        #map {
-            flex-grow: 1;
+        /* The scrollable area inside the floating panel */
+        .panel-body {
+            /* take remaining space inside the panel */
+            flex: 1 1 auto;
+            overflow: auto;
+            -webkit-overflow-scrolling: touch; /* smoother scrolling on iOS */
+            padding-right: 4px; /* avoid content flush against scrollbar */
+        }
+
+        /* Ensure the table inside the panel body doesn't overflow horizontally */
+        .panel-body table {
+            width: 100%;
+            table-layout: fixed;
+        }
+
+        .panel-body td, .panel-body th {
+            word-break: break-word;
         }
 
         button {
@@ -116,42 +155,153 @@
        <div id="side-panel">
 
            <h2>Seattle Tesla Charger Stations</h2>
-           <button id="btn-connectors">Sort by Connector Count</button>
+           <div class="panel-body">
+               <label for="style-select">Map style:</label>
+               <select id="style-select" aria-label="Map style selector">
+                   <option value="mapbox://styles/mapbox/streets-v11">Streets</option>
+                   <option value="mapbox://styles/mapbox/light-v10">Light</option>
+                   <option value="mapbox://styles/mapbox/dark-v10">Dark</option>
+                   <option value="mapbox://styles/mapbox/satellite-v9">Satellite</option>
+               </select>
 
-           <table>
-               <tr>
-                   <th>Station Name</th>
-                   <th>City</th>
-                   <th>Connector Count</th>
-               </tr>
-           </table>
+               <button id="btn-connectors">Sort by Connector Count</button>
+
+               <table>
+                   <tr>
+                       <th>Station Name</th>
+                       <th>City</th>
+                       <th>Connector Count</th>
+                   </tr>
+               </table>
+           </div>
 
        </div>
        <div id="map"></div>
    </main>
    <script>
         mapboxgl.accessToken = 'pk.eyJ1IjoiamFlZGVuY2NhIiwiYSI6ImNtaGM4cDNxdDI3cHkya3B1emRxYzJuNWQifQ.GD3_Rhp6YQw5CkRSFClT0w';
+
+        // default initial style (non-satellite)
+        const initialStyle = 'mapbox://styles/mapbox/streets-v11';
+        let evdataGlobal = null;
+        let seattleDataGlobal = null;
+
         let map = new mapboxgl.Map({
             container: 'map', // container ID
-            style: 'mapbox://styles/mapbox/satellite-v9', // style URL
+            style: initialStyle,
             zoom: 12, // starting zoom for Seattle city view
             center: [-122.3321, 47.6062] // center on Seattle downtown
         });
 
+        // Helper: remove layer/source safely
+        function removeLayerIfExists(id) {
+            if (map.getLayer(id)) map.removeLayer(id);
+        }
+        function removeSourceIfExists(id) {
+            if (map.getSource(id)) map.removeSource(id);
+        }
+
+        // Add our data layers (call after style is loaded)
+        function addDataLayers() {
+            if (!evdataGlobal) return;
+
+            // remove existing layers/sources if present
+            removeLayerIfExists('evstations-layer');
+            removeSourceIfExists('evstations');
+            removeLayerIfExists('seattle-fill');
+            removeLayerIfExists('seattle-outline');
+            removeSourceIfExists('seattle');
+
+            // add seattle boundary if available
+            if (seattleDataGlobal) {
+                map.addSource('seattle', { type: 'geojson', data: seattleDataGlobal });
+                map.addLayer({
+                    'id': 'seattle-fill',
+                    'type': 'fill',
+                    'source': 'seattle',
+                    'paint': { 'fill-color': '#2b8cbe', 'fill-opacity': 0.15 }
+                });
+                map.addLayer({
+                    'id': 'seattle-outline',
+                    'type': 'line',
+                    'source': 'seattle',
+                    'paint': { 'line-color': '#2b8cbe', 'line-width': 2, 'line-opacity': 0.8 }
+                });
+            }
+
+            // add EV stations
+            map.addSource('evstations', { type: 'geojson', data: evdataGlobal });
+
+            // Keep track of the hovered feature
+            let hoveredStateId = null;
+
+            map.addLayer({
+                'id': 'evstations-layer',
+                'type': 'circle',
+                'source': 'evstations',
+                'paint': {
+                    'circle-radius': [ 'case', ['boolean', ['feature-state', 'hover'], false], 12, 8 ],
+                    'circle-stroke-width': [ 'case', ['boolean', ['feature-state', 'hover'], false], 3, 2 ],
+                    'circle-color': '#2b8cbe',
+                    'circle-stroke-color': 'white'
+                }
+            });
+
+            // popup handling for hover
+            const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 15, className: 'station-popup' });
+
+            map.on('mouseenter', 'evstations-layer', (e) => {
+                map.getCanvas().style.cursor = 'pointer';
+                if (e.features.length > 0) {
+                    const feature = e.features[0];
+                    if (hoveredStateId !== null) {
+                        map.setFeatureState({ source: 'evstations', id: hoveredStateId }, { hover: false });
+                    }
+                    hoveredStateId = feature.id;
+                    map.setFeatureState({ source: 'evstations', id: hoveredStateId }, { hover: true });
+
+                    const coordinates = feature.geometry.coordinates.slice();
+                    const stationName = feature.properties['Station Name'];
+                    const connectorCount = feature.properties['EV J3400 Connector Count'];
+                    const popupContent = `<strong>${stationName}</strong><br>Connectors: ${connectorCount}`;
+
+                    while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+                        coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+                    }
+
+                    popup.setLngLat(coordinates).setHTML(popupContent).addTo(map);
+                }
+            });
+
+            map.on('mouseleave', 'evstations-layer', () => {
+                map.getCanvas().style.cursor = '';
+                if (hoveredStateId !== null) {
+                    map.setFeatureState({ source: 'evstations', id: hoveredStateId }, { hover: false });
+                }
+                hoveredStateId = null;
+                popup.remove();
+            });
+        }
+
         async function geojsonFetch() {
-            let response, evdata, table;
+            let response;
             response = await fetch('assets/grouped_ev_stations.geojson');
-            evdata = await response.json();
-            
+            evdataGlobal = await response.json();
+
             // Add unique IDs to each feature for hover state tracking
-            evdata.features = evdata.features.map((feature, index) => {
+            evdataGlobal.features = evdataGlobal.features.map((feature, index) => {
                 feature.id = index;
                 return feature;
             });
 
+            // fetch seattle boundary too so we can re-add when styles change
+            response = await fetch('assets/seattle.geojson');
+            seattleDataGlobal = await response.json();
+
+            // populate table
             table = document.getElementsByTagName("table")[0];
             let row, cell0, cell1, cell2;
-            for (let i = 0; i < evdata.features.length; i++) {
+            for (let i = 0; i < evdataGlobal.features.length; i++) {
                 row = table.insertRow(-1);
                 // Add hover effect and pointer cursor
                 row.style.cursor = 'pointer';
@@ -162,154 +312,32 @@
                 cell1 = row.insertCell(1);
                 cell2 = row.insertCell(2);
 
-                const props = evdata.features[i].properties || {};
-                const coords = evdata.features[i].geometry.coordinates;
+                const props = evdataGlobal.features[i].properties || {};
+                const coords = evdataGlobal.features[i].geometry.coordinates;
                 cell0.innerHTML = props['Station Name'] || '';
                 cell1.innerHTML = props['City'] || '';
                 cell2.innerHTML = props['EV J3400 Connector Count'] || '0';
                 
                 // Add click handler to fly to location
                 row.addEventListener('click', () => {
-                    map.flyTo({
-                        center: coords,
-                        zoom: 15,
-                        essential: true
-                    });
+                    map.flyTo({ center: coords, zoom: 15, essential: true });
                 });
             }
 
-            // load data to the map as a new layer
-            map.on('load', async function loadingData() {
-                // Add Seattle boundary first
-                const seattleResponse = await fetch('assets/seattle.geojson');
-                const seattleData = await seattleResponse.json();
-                
-                map.addSource('seattle', {
-                    type: 'geojson',
-                    data: seattleData
-                });
+            // When the map style finishes loading initially, add layers
+            map.on('load', () => {
+                addDataLayers();
+            });
 
-                // Add the boundary layer (so it's underneath the points)
-                map.addLayer({
-                    'id': 'seattle-fill',
-                    'type': 'fill',
-                    'source': 'seattle',
-                    'paint': {
-                        'fill-color': '#2b8cbe',
-                        'fill-opacity': 0.5
-                    }
-                });
-
-                // Add boundary outline
-                map.addLayer({
-                    'id': 'seattle-outline',
-                    'type': 'line',
-                    'source': 'seattle',
-                    'paint': {
-                        'line-color': '#2b8cbe',
-                        'line-width': 2,
-                        'line-opacity': 0.8
-                    }
-                });
-
-                // Add EV stations source
-                map.addSource('evstations', {
-                    type: 'geojson',
-                    data: evdata
-                });
-
-                // Keep track of the hovered feature
-                let hoveredStateId = null;
-
-                map.addLayer({
-                    'id': 'evstations-layer',
-                    'type': 'circle',
-                    'source': 'evstations',
-                    'paint': {
-                        'circle-radius': [
-                            'case',
-                            ['boolean', ['feature-state', 'hover'], false],
-                            12,
-                            8
-                        ],
-                        'circle-stroke-width': [
-                            'case',
-                            ['boolean', ['feature-state', 'hover'], false],
-                            3,
-                            2
-                        ],
-                        'circle-color': '#2b8cbe',
-                        'circle-stroke-color': 'white',
-                        'circle-radius-transition': {
-                            'duration': 300
-                        },
-                        'circle-stroke-width-transition': {
-                            'duration': 300
-                        }
-                    }
-                });
-                
-                // When the user moves their mouse over the points layer
-                // Create a popup but don't add it to the map yet
-                const popup = new mapboxgl.Popup({
-                    closeButton: false,
-                    closeOnClick: false,
-                    offset: 15,
-                    className: 'station-popup'
-                });
-
-                map.on('mouseenter', 'evstations-layer', (e) => {
-                    map.getCanvas().style.cursor = 'pointer';
-                    if (e.features.length > 0) {
-                        const feature = e.features[0];
-                        
-                        // Handle hover state
-                        if (hoveredStateId !== null) {
-                            map.setFeatureState(
-                                { source: 'evstations', id: hoveredStateId },
-                                { hover: false }
-                            );
-                        }
-                        hoveredStateId = feature.id;
-                        map.setFeatureState(
-                            { source: 'evstations', id: hoveredStateId },
-                            { hover: true }
-                        );
-
-                        // Show popup
-                        const coordinates = feature.geometry.coordinates.slice();
-                        const stationName = feature.properties['Station Name'];
-                        const connectorCount = feature.properties['EV J3400 Connector Count'];
-                        
-                        // Create popup content
-                        const popupContent = `
-                            <strong>${stationName}</strong><br>
-                            Connectors: ${connectorCount}
-                        `;
-                        
-                        // Ensure proper popup placement
-                        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
-                            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
-                        }
-                        
-                        popup
-                            .setLngLat(coordinates)
-                            .setHTML(popupContent)
-                            .addTo(map);
-                    }
-                });
-                
-                // When the mouse leaves the points layer
-                map.on('mouseleave', 'evstations-layer', () => {
-                    map.getCanvas().style.cursor = '';
-                    if (hoveredStateId !== null) {
-                        map.setFeatureState(
-                            { source: 'evstations', id: hoveredStateId },
-                            { hover: false }
-                        );
-                    }
-                    hoveredStateId = null;
-                    popup.remove(); // Remove the popup
+            // Wire up style selector so layers are re-added after style change
+            const styleSelect = document.getElementById('style-select');
+            styleSelect.value = initialStyle;
+            styleSelect.addEventListener('change', (e) => {
+                const newStyle = e.target.value;
+                map.setStyle(newStyle);
+                // once the style is loaded, re-add our sources/layers
+                map.once('styledata', () => {
+                    addDataLayers();
                 });
             });
         };
