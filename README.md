@@ -50,7 +50,8 @@ You can pan, zoom, and explore charger clusters across Seattle.
 ## 📁 Files
 | File | Description |
 |------|--------------|
-| `cleaned.geojson` | Cleaned dataset of Tesla charging stations |
+| `cleaned_ev_stations.geojson` | Cleaned raw dataset of Tesla charging stations across Seattle|
+| `grouped_ev_stations.geojson` | Grouped counts of Tesla charging stations |
 | `seattle.geojson` | Custom Seattle coastline boundary |
 | `index.html` | Interactive map output |
 
