@@ -54,6 +54,8 @@ You can pan, zoom, and explore charger clusters across Seattle.
 | `grouped_ev_stations.geojson` | Grouped counts of Tesla charging stations |
 | `seattle.geojson` | Custom Seattle coastline boundary |
 | `index.html` | Interactive map output |
+| `get.py` | Script used to get raw data from NREL |
+| `geog328_data_cleaning.ipynb` | Notebook used for data cleaning |
 
 ---
 
